@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Watch Party</title>
+<style>
+:root{--bg:#0f1117;--card:#1a1d27;--line:#2a2e3d;--tx:#e8eaf2;--mut:#8b90a5;--ac:#7c5cff;--ok:#2ecc71;--bad:#ff5c6c}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:14px system-ui,sans-serif}
+button,input,select{font:inherit;color:var(--tx);background:#242838;border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+button{cursor:pointer}button:hover{border-color:var(--ac)}button.p{background:var(--ac);border-color:var(--ac)}
+button.sm{padding:3px 8px;font-size:12px}.hide{display:none!important}
+#home{max-width:420px;margin:12vh auto;background:var(--card);padding:28px;border-radius:14px;display:grid;gap:12px}
+#home h1{margin:0 0 4px}.or{text-align:center;color:var(--mut)}
+#app{display:grid;grid-template-columns:1fr 340px;gap:14px;padding:14px;height:100vh}
+.col{display:flex;flex-direction:column;gap:12px;min-height:0}.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+.top{display:flex;gap:10px;align-items:center;justify-content:space-between}.badge{font-size:11px;padding:2px 8px;border-radius:99px;background:#2d3250}
+.badge.host{background:#7c5cff}.badge.moderator{background:#1e8f5a}
+#pw{position:relative;aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden}#pw iframe,#pw>div{width:100%;height:100%}
+#pw .shield{position:absolute;inset:0;z-index:2}
+.ctl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}#seek{flex:1;min-width:140px;accent-color:var(--ac)}
+#vid{flex:1;min-width:160px}.side{overflow:auto;gap:10px}
+.row{display:flex;gap:6px;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line)}
+.row:last-child{border:0}.acts{display:flex;gap:4px;flex-wrap:wrap}h3{margin:0 0 8px;font-size:13px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em}
+#chat{flex:1;min-height:120px;overflow:auto;display:flex;flex-direction:column;gap:4px;margin-bottom:8px}.msg b{color:var(--ac)}
+.react{display:flex;gap:6px}.react button{padding:4px 8px}
+#toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#2d3250;padding:10px 16px;border-radius:10px;opacity:0;transition:.3s;pointer-events:none}
+#toast.on{opacity:1}.float{position:fixed;bottom:80px;font-size:34px;animation:up 2.2s ease-out forwards;pointer-events:none}
+@keyframes up{to{transform:translateY(-260px);opacity:0}}
+@media(max-width:860px){#app{grid-template-columns:1fr;height:auto}}
+</style></head><body>
+<div id="home">
+  <h1>🎬 Watch Party</h1>
+  <input id="name" placeholder="Your name" maxlength="24">
+  <button class="p" id="create">Create new room (you become Host)</button>
+  <div class="or">— or join —</div>
+  <input id="code" placeholder="Room code" maxlength="8" style="text-transform:uppercase">
+  <button id="join">Join room</button>
+</div>
+<div id="app" class="hide">
+  <div class="col">
+    <div class="card top"><div><b id="rid"></b> <button class="sm" id="copy">Copy invite link</button></div>
+      <div>You: <b id="me"></b> <span id="myrole" class="badge"></span> <button class="sm" id="leave">Leave</button></div></div>
+    <div id="pw"><div id="player"></div><div class="shield"></div></div>
+    <div class="card ctl">
+      <button id="pp" class="p">▶ Play</button><input type="range" id="seek" min="0" max="100" value="0" step="1">
+      <span id="tm">0:00</span></div>
+    <div class="card ctl"><input id="vid" placeholder="Paste YouTube URL…"><button id="load">Load video</button>
+      <div class="react" id="react"></div></div>
+  </div>
+  <div class="col side">
+    <div class="card"><h3>Participants</h3><div id="plist"></div></div>
+    <div class="card"><h3>Change requests</h3><div id="reqs"></div></div>
+    <div class="card" style="flex:1;display:flex;flex-direction:column;min-height:200px"><h3>Chat</h3><div id="chat"></div>
+      <div class="ctl"><input id="ctext" style="flex:1" placeholder="Message…" maxlength="300"><button id="send">Send</button></div></div>
+  </div>
+</div>
+<div id="toast"></div>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const $=s=>document.querySelector(s), h=(t,p={},...k)=>{const e=document.createElement(t);Object.assign(e,p);e.append(...k);return e};
+const socket=io(); let me={}, parts=[], reqs=[], st={playState:'paused',currentTime:0,videoId:null}, yt=null, apiReady=false, cur=null, drag=false, started=0;
+const EM=['👍','😂','😮','❤️','🔥','👏'];
+const canCtl=()=>['host','moderator'].includes(me.role), isHost=()=>me.role==='host';
+const fmt=s=>{s=Math.max(0,s|0);return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')};
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('on');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('on'),2800)}
+const qs=new URLSearchParams(location.search); if(qs.get('room')) $('#code').value=qs.get('room');
+$('#name').value=localStorage.getItem('wp_name')||'';
+const go=create=>{const n=$('#name').value.trim(); if(!n) return toast('Enter your name'); localStorage.setItem('wp_name',n);
+  socket.emit('join_room',{roomId:$('#code').value,username:n,create})};
+$('#create').onclick=()=>go(true); $('#join').onclick=()=>go(false);
+
+// ---- YouTube IFrame API ----
+const s=document.createElement('script'); s.src='https://www.youtube.com/iframe_api'; document.head.append(s);
+window.onYouTubeIframeAPIReady=()=>{apiReady=true; mkPlayer()};
+function mkPlayer(){ if(!apiReady||yt||!st.videoId) return; cur=st.videoId;
+  yt=new YT.Player('player',{videoId:st.videoId,playerVars:{controls:0,disablekb:1,rel:0,modestbranding:1,playsinline:1},
+    events:{onReady:()=>applyState(st)}}) }
+function applyState(x){ st=x; if(!yt||!yt.getCurrentTime) return mkPlayer();
+  if(x.videoId!==cur){cur=x.videoId; yt.loadVideoById(x.videoId,x.currentTime); if(x.playState!=='playing') setTimeout(()=>yt.pauseVideo(),700); }
+  else{ if(Math.abs(yt.getCurrentTime()-x.currentTime)>1.5) yt.seekTo(x.currentTime,true);
+    x.playState==='playing'?yt.playVideo():yt.pauseVideo(); }
+  started=Date.now(); ui() }
+
+// ---- Actions: direct if Host/Mod, else becomes a request ----
+function act(action,payload={}){ canCtl()?socket.emit(action,payload):(socket.emit('request_action',{action,payload}),toast('Request sent to Host/Moderator')) }
+$('#pp').onclick=()=>act(st.playState==='playing'?'pause':'play');
+$('#seek').onchange=e=>{drag=false;act('seek',{time:+e.target.value})}; $('#seek').oninput=()=>drag=true;
+$('#load').onclick=()=>{const v=$('#vid').value.trim(); if(v){act('change_video',{videoId:v});$('#vid').value=''}};
+setInterval(()=>{ if(!yt||!yt.getDuration) return; const d=yt.getDuration()||0, c=yt.getCurrentTime()||0;
+  $('#seek').max=d; if(!drag) $('#seek').value=c; $('#tm').textContent=fmt(c)+' / '+fmt(d) },500);
+
+// ---- UI rendering ----
+function ui(){ $('#myrole').textContent=me.role; $('#myrole').className='badge '+me.role;
+  const c=canCtl(); $('#pp').textContent=(st.playState==='playing'?'⏸ Pause':'▶ Play')+(c?'':' (request)');
+  $('#load').textContent=c?'Load video':'Request video'; $('#seek').title=c?'':'Release to request a seek';
+  const pl=$('#plist'); pl.replaceChildren(...parts.map(p=>{const youHost=isHost()&&p.userId!==me.userId;
+    const acts=h('div',{className:'acts'});
+    if(youHost){ const sel=h('select',{onchange:e=>socket.emit('assign_role',{userId:p.userId,role:e.target.value})},
+        ...['participant','viewer','moderator'].concat(p.role==='host'?[]:[]).map(r=>h('option',{value:r,selected:r===p.role},r)));
+      acts.append(sel,h('button',{className:'sm',textContent:'Make host',onclick:()=>confirm('Transfer host to '+p.username+'?')&&socket.emit('transfer_host',{userId:p.userId})}),
+        h('button',{className:'sm',textContent:'Remove',onclick:()=>socket.emit('remove_participant',{userId:p.userId})})) }
+    return h('div',{className:'row'},h('span',{},p.username+(p.userId===me.userId?' (you)':'')+' ',h('span',{className:'badge '+p.role,textContent:p.role})),acts)}));
+  const rq=$('#reqs'); rq.replaceChildren(...(reqs.length?reqs.map(r=>{const label=r.username+' → '+r.action.replace('_',' ')+(r.action==='seek'?' to '+fmt(r.payload.time):'')+(r.action==='change_video'?' ('+(r.payload.videoId||'').slice(-11)+')':'');
+    return h('div',{className:'row'},h('span',{},label),canCtl()?h('div',{className:'acts'},
+      h('button',{className:'sm p',textContent:'✔',onclick:()=>socket.emit('resolve_request',{requestId:r.id,approve:true})}),
+      h('button',{className:'sm',textContent:'✖',onclick:()=>socket.emit('resolve_request',{requestId:r.id,approve:false})})):h('span',{className:'badge',textContent:'pending'}))}):[h('span',{style:'color:var(--mut)'},'No pending requests')])) }
+function addChat(m){const c=$('#chat'); c.append(h('div',{className:'msg'},h('b',{},m.username+': '),m.text)); c.scrollTop=c.scrollHeight}
+const sendChat=()=>{const t=$('#ctext').value; if(t.trim()){socket.emit('chat_message',{text:t});$('#ctext').value=''}};
+$('#send').onclick=sendChat; $('#ctext').onkeydown=e=>e.key==='Enter'&&sendChat();
+EM.forEach(e=>$('#react').append(h('button',{textContent:e,onclick:()=>socket.emit('reaction',{emoji:e})})));
+$('#copy').onclick=()=>navigator.clipboard.writeText(location.origin+'/?room='+$('#rid').textContent).then(()=>toast('Invite link copied'));
+$('#leave').onclick=()=>{socket.emit('leave_room'); location.href='/'};
+
+// ---- Socket events ----
+const upd=d=>{parts=d.participants; const m=parts.find(p=>p.userId===me.userId); if(m) me.role=m.role; ui()};
+socket.on('joined',d=>{me={userId:d.userId,role:d.role,name:$('#name').value}; parts=d.participants; reqs=d.requests; $('#home').classList.add('hide'); $('#app').classList.remove('hide');
+  $('#rid').textContent=d.roomId; $('#me').textContent=me.name; history.replaceState(null,'','/?room='+d.roomId); $('#chat').replaceChildren(); d.chat.forEach(addChat); st=d.state; mkPlayer(); applyState(d.state)});
+socket.on('sync_state',applyState);
+socket.on('user_joined',d=>{toast(d.username+' joined'); upd(d)});
+socket.on('user_left',d=>{toast(d.username+' left'); upd(d)});
+socket.on('role_assigned',d=>{toast(d.username+' is now '+d.role); upd(d)});
+socket.on('host_transferred',d=>{toast(d.to+' is now the Host'); upd(d)});
+socket.on('participant_removed',upd);
+socket.on('requests_update',d=>{reqs=d.requests; ui()});
+socket.on('request_resolved',d=>toast(d.username+"'s "+d.action.replace('_',' ')+' request '+(d.approved?'approved':'rejected')+' by '+d.by));
+socket.on('removed',d=>{alert(d.message); location.href='/'});
+socket.on('error_msg',d=>toast(d.message));
+socket.on('chat_message',addChat);
+socket.on('reaction',d=>{const f=h('div',{className:'float',textContent:d.emoji,title:d.username}); f.style.left=(20+Math.random()*60)+'vw'; document.body.append(f); setTimeout(()=>f.remove(),2300)});
+</script></body></html>

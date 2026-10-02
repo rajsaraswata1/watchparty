@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: youtube-watch-party
+    runtime: node
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /health
