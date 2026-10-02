@@ -2,7 +2,7 @@
 
 Real-time synchronized YouTube watching with rooms, role-based access control, and a **request → approve** workflow.
 
-**Live URL:** `https://<your-app>.onrender.com`  ← _replace after deploying_
+**Live URL:** `https://watchparty-t2aj.onrender.com/
 
 ## Features
 - Create room (creator = **Host**) or join via room code / invite link (joiner = **Participant**)
